@@ -1,24 +1,29 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, SafeAreaView, StatusBar } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, SafeAreaView, StatusBar, ActivityIndicator } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { QRScanner } from './src/components/QRScanner';
 import { SensorCard } from './src/components/SensorCard';
+import { SensorTable } from './src/components/SensorTable';
 import { useBLE } from './src/hooks/useBLE';
 import './global.css';
 
 export default function App() {
     const [showScanner, setShowScanner] = useState(false);
-    const { connectToDevice, disconnect, connectedDevice, logs, isConnecting, lastPacket } = useBLE();
+    const { connectToDevice, disconnect, reset, connectedDevice, isConnecting, lastPacket, statusMessage } = useBLE();
 
     const handleQRScanned = (data: string) => {
         setShowScanner(false);
         connectToDevice(data);
     };
 
+    const handleBack = () => {
+        reset();
+    };
+
     return (
         <SafeAreaProvider>
-            <SafeAreaView className="flex-1 bg-slate-950">
-                <StatusBar barStyle="light-content" />
+            <SafeAreaView className="flex-1 bg-slate-50">
+                <StatusBar barStyle="dark-content" />
                 
                 {showScanner ? (
                     <QRScanner 
@@ -26,96 +31,108 @@ export default function App() {
                         onClose={() => setShowScanner(false)} 
                     />
                 ) : (
-                    <View className="flex-1 px-4 py-2">
-                        <View className="items-center mt-6 mb-8">
-                            <Text className="text-3xl font-extrabold text-white tracking-tight">
-                                C-Tag <Text className="text-blue-500">Live</Text>
-                            </Text>
-                        </View>
-
-                        <View className="bg-slate-900 rounded-3xl p-5 border border-slate-800 shadow-2xl mb-4">
-                            <View className="flex-row justify-between items-center mb-4">
-                                <View>
-                                    <Text className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">Connection</Text>
-                                    <View className="flex-row items-center">
-                                        <View className={`w-2 h-2 rounded-full mr-2 ${connectedDevice ? 'bg-green-500' : isConnecting ? 'bg-blue-500 animate-pulse' : 'bg-slate-600'}`} />
-                                        <Text className={`text-base font-bold ${connectedDevice ? 'text-white' : 'text-slate-500'}`}>
-                                            {connectedDevice ? (connectedDevice.name || 'Device Connected') : isConnecting ? 'Connecting...' : 'Disconnected'}
+                    <ScrollView className="flex-1">
+                        <View className="px-6 py-4">
+                            {/* Header */}
+                            <View className="flex-row justify-between items-center mt-12 mb-8">
+                                <View className="flex-row items-center">
+                                    {(connectedDevice || isConnecting) && (
+                                        <TouchableOpacity 
+                                            onPress={handleBack}
+                                            className="mr-4 p-2 bg-white rounded-full border border-slate-100 shadow-sm"
+                                        >
+                                            <Text className="text-blue-500 font-bold text-xs uppercase">← Back</Text>
+                                        </TouchableOpacity>
+                                    )}
+                                    <View>
+                                        <Text className="text-2xl font-black text-slate-900 tracking-tight">
+                                            C-Tag <Text className="text-blue-500">Live</Text>
                                         </Text>
+                                        <View className="flex-row items-center mt-1">
+                                            {isConnecting && !connectedDevice && (
+                                                <ActivityIndicator size="small" color="#3B82F6" className="mr-2 scale-75" />
+                                            )}
+                                            <View className={`w-1.5 h-1.5 rounded-full mr-2 ${connectedDevice ? 'bg-green-500' : isConnecting ? 'bg-blue-500' : 'bg-slate-300'}`} />
+                                            <Text className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                                                {statusMessage}
+                                            </Text>
+                                        </View>
                                     </View>
                                 </View>
-                                {!connectedDevice ? (
+                                
+                                {!connectedDevice && (
                                     <TouchableOpacity 
                                         onPress={() => setShowScanner(true)}
-                                        disabled={isConnecting}
-                                        className="bg-blue-600 px-4 py-2 rounded-xl shadow-lg"
+                                        className="bg-blue-500 px-5 py-2.5 rounded-2xl shadow-blue-200 shadow-lg"
                                     >
-                                        <Text className="text-white font-bold text-sm">Scan QR</Text>
-                                    </TouchableOpacity>
-                                ) : (
-                                    <TouchableOpacity 
-                                        onPress={disconnect}
-                                        className="bg-red-500/10 border border-red-500/20 px-4 py-2 rounded-xl"
-                                    >
-                                        <Text className="text-red-500 font-bold text-sm">Stop</Text>
+                                        <Text className="text-white font-bold text-xs uppercase tracking-wider">
+                                            {isConnecting ? 'Rescan' : 'Scan QR'}
+                                        </Text>
                                     </TouchableOpacity>
                                 )}
                             </View>
 
-                            {lastPacket && (
-                                <View className="flex-row flex-wrap -m-2 pt-2">
-                                    <SensorCard 
-                                        title="Battery" 
-                                        value={lastPacket.battery} 
-                                        unit="%" 
-                                        color={lastPacket.battery > 20 ? 'green' : 'orange'}
-                                    />
-                                    <SensorCard 
-                                        title="Temperature" 
-                                        value={lastPacket.temperature.toFixed(2)} 
-                                        unit="°C" 
-                                        color="orange"
-                                    />
-                                    <SensorCard 
-                                        title="Accelerometer" 
-                                        value={`${lastPacket.accelerometer.x}`}
-                                        subValue={`Y: ${lastPacket.accelerometer.y} Z: ${lastPacket.accelerometer.z}`}
-                                        color="blue"
-                                    />
-                                    <SensorCard 
-                                        title="Gyroscope" 
-                                        value={`${lastPacket.gyroscope.x}`}
-                                        subValue={`Y: ${lastPacket.gyroscope.y} Z: ${lastPacket.gyroscope.z}`}
-                                        color="purple"
-                                    />
+                            {/* Summary Cards */}
+                            {lastPacket ? (
+                                <View>
+                                    <View className="flex-row -m-2">
+                                        <SensorCard 
+                                            title="Battery" 
+                                            value={lastPacket.battery} 
+                                            unit="%" 
+                                            subValue={lastPacket.battery > 20 ? 'Healthy' : 'Low'}
+                                        />
+                                        <SensorCard 
+                                            title="Temp" 
+                                            value={lastPacket.temperature.toFixed(1)} 
+                                            unit="°C" 
+                                            subValue="Ambient"
+                                        />
+                                    </View>
+
+                                    {/* Tabular Data */}
+                                    <View className="mt-4">
+                                        <Text className="mx-2 text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-1">Motion Analysis</Text>
+                                        <SensorTable data={{
+                                            accelerometer: lastPacket.accelerometer,
+                                            gyroscope: lastPacket.gyroscope,
+                                            magnetometer: lastPacket.magnetometer
+                                        }} />
+                                    </View>
+
+                                    {/* Stats Footer */}
+                                    <View className="mt-6 items-center">
+                                        <View className="bg-white/50 px-4 py-2 rounded-full border border-slate-100 italic">
+                                            <Text className="text-slate-400 text-[10px]">
+                                                Update Frequency: 1Hz  •  Packet #{lastPacket.packetNumber}
+                                            </Text>
+                                        </View>
+                                    </View>
+                                </View>
+                            ) : (
+                                <View className="mt-20 items-center justify-center">
+                                    {isConnecting || (connectedDevice && !lastPacket) ? (
+                                        <View className="items-center">
+                                            <ActivityIndicator size="large" color="#3B82F6" className="mb-6" />
+                                            <Text className="text-slate-900 text-lg font-bold italic animate-pulse">
+                                                {connectedDevice ? 'Awaiting Sensor Data...' : 'Establishing Sensor Link...'}
+                                            </Text>
+                                        </View>
+                                    ) : (
+                                        <>
+                                            <View className="w-20 h-20 bg-blue-50 rounded-full items-center justify-center mb-6">
+                                                <Text className="text-3xl text-blue-500 font-bold">?</Text>
+                                            </View>
+                                            <Text className="text-slate-900 text-lg font-bold">No Active Data</Text>
+                                            <Text className="text-slate-400 text-center mt-2 px-10 text-sm leading-5">
+                                                Scan a device QR code to begin real-time sensor monitoring.
+                                            </Text>
+                                        </>
+                                    )}
                                 </View>
                             )}
                         </View>
-
-                        <View className="flex-1 bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
-                            <View className="bg-slate-800/50 px-5 py-3 border-b border-slate-800 flex-row justify-between items-center">
-                                <Text className="text-white font-bold text-sm italic">Raw Activity</Text>
-                                {lastPacket && (
-                                    <Text className="text-slate-500 text-[10px] font-mono">Pkt: #{lastPacket.packetNumber}</Text>
-                                )}
-                            </View>
-                            <ScrollView 
-                                className="flex-1 p-4"
-                                contentContainerStyle={{ paddingBottom: 20 }}
-                                ref={(ref) => ref?.scrollToEnd({ animated: true })}
-                            >
-                                {logs.length === 0 ? (
-                                    <Text className="text-slate-600 italic text-center mt-10">Waiting for connection...</Text>
-                                ) : (
-                                    logs.map((log, i) => (
-                                        <Text key={i} className="text-slate-400 font-mono text-[9px] mb-1 leading-4">
-                                            {log}
-                                        </Text>
-                                    ))
-                                )}
-                            </ScrollView>
-                        </View>
-                    </View>
+                    </ScrollView>
                 )}
             </SafeAreaView>
         </SafeAreaProvider>

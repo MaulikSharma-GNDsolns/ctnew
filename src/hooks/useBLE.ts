@@ -13,62 +13,60 @@ export const useBLE = () => {
     const manager = useMemo(() => new BleManager(), []);
     const parser = useMemo(() => new ProtocolParser(), []);
     const [connectedDevice, setConnectedDevice] = useState<Device | null>(null);
-    const [logs, setLogs] = useState<string[]>([]);
     const [isConnecting, setIsConnecting] = useState(false);
     const [lastPacket, setLastPacket] = useState<ParsedPacket | null>(null);
+    const [statusMessage, setStatusMessage] = useState<string>('Ready to scan');
 
     const addLog = (message: string) => {
-        console.log(message);
-        setLogs(prev => [...prev.slice(-49), `${new Date().toLocaleTimeString()}: ${message}`]);
+        console.log(`[BLE]: ${message}`);
+        setStatusMessage(message);
     };
 
     const connectToDevice = async (deviceName: string) => {
-        if (isConnecting) return;
+        // ALWAYS stop previous scan/connection attempts before starting a new one
+        manager.stopDeviceScan();
+        if (connectedDevice) {
+            await disconnect();
+        }
         
         setIsConnecting(true);
-        addLog(`Checking permissions...`);
+        setLastPacket(null);
+        addLog(`Scanning...`);
+        
         const hasPermissions = await requestBluetoothPermissions();
         if (!hasPermissions) {
-            addLog('Bluetooth permissions denied.');
+            addLog('Permissions Denied');
             setIsConnecting(false);
             return;
         }
 
         try {
-            // STEP 1: Start scanning (Inclusive scan for reliability)
-            addLog(`Scanning for ${deviceName}...`);
             manager.startDeviceScan(null, { allowDuplicates: false }, async (error, device) => {
                 if (error) {
                     addLog(`Scan Error: ${error.message}`);
                     setIsConnecting(false);
-                    manager.stopDeviceScan();
                     return;
                 }
 
                 if (device && (device.name === deviceName || device.localName === deviceName)) {
-                    // STOP SCAN IMMEDIATELY
                     manager.stopDeviceScan();
-                    
-                    addLog(`Found ${deviceName}. Post-scan stabilization (1.5s)...`);
-                    // IMPORTANT: Wait for the Bluetooth stack to clear the scan state
+                    addLog(`Found ${deviceName}. Stabilizing...`);
                     await new Promise(resolve => setTimeout(resolve, 1500));
-                    
-                    addLog(`Connecting to ${deviceName}...`);
+                    addLog(`Connecting...`);
                     await setupDevice(device, deviceName);
                 }
             });
 
-            // Timeout scan after 20 seconds
             setTimeout(() => {
                 if (!connectedDevice && isConnecting) {
                     manager.stopDeviceScan();
-                    addLog('Scan timed out. Device not found.');
+                    addLog('Device Not Found');
                     setIsConnecting(false);
                 }
             }, 20000);
 
         } catch (err: any) {
-            addLog(`Setup Error: ${err.message}`);
+            addLog(`Error: ${err.message}`);
             setIsConnecting(false);
         }
     };
@@ -79,45 +77,37 @@ export const useBLE = () => {
 
         while (retryCount <= maxRetries) {
             try {
-                // Ensure we are connected
                 let connected = device;
                 const isAlreadyConnected = await device.isConnected();
                 
                 if (!isAlreadyConnected) {
-                    addLog(retryCount > 0 ? `Retrying connection (${retryCount}/${maxRetries})...` : 'Connecting (15s timeout)...');
+                    if (retryCount > 0) addLog(`Retrying...`);
                     connected = await device.connect({ autoConnect: false, timeout: 15000 });
                 }
 
-                addLog('Connection stable. Negotiating MTU...');
+                addLog('Negotiating...');
                 try {
-                    // Request MTU immediately after connecting
                     await connected.requestMTU(512);
-                    addLog('MTU 512 Negotiated.');
-                } catch (mtuErr) {
-                    addLog('MTU Negotiation failed or skipped.');
-                }
+                } catch (mtuErr) {}
 
-                // Small delay to allow GATT stack to settle
-                addLog('Waiting for stabilization (1.5s)...');
+                addLog('Preparing Services...');
                 await new Promise(resolve => setTimeout(resolve, 1500));
-
-                addLog('Discovering services...');
                 await connected.discoverAllServicesAndCharacteristics();
                 
                 setConnectedDevice(connected);
-                addLog(`Ready! Connected to ${deviceName}`);
+                addLog(`Live Data Active`);
 
-                // Subscribe to TX characteristic
-                addLog(`Waiting for data (NUS TX)...`);
                 connected.monitorCharacteristicForService(
                     NUS_SERVICE_UUID,
                     NUS_TX_CHARACTERISTIC_UUID,
                     (error, characteristic) => {
                         if (error) {
                             if (error.message.includes('Cancelled')) return;
-                            addLog(`Monitor Error: ${error.message}`);
                             if (error.message.includes('Disconnected')) {
                                 setConnectedDevice(null);
+                                addLog('Ready to Scan');
+                            } else {
+                                addLog('Connection Lost');
                             }
                             return;
                         }
@@ -126,23 +116,20 @@ export const useBLE = () => {
                             const packet = parser.addData(buffer);
                             if (packet) {
                                 setLastPacket(packet);
-                                addLog(`[DATA]: Pkt #${packet.packetNumber}`);
                             }
                         }
                     }
                 );
                 
-                // If we reached here, connection was successful
                 setIsConnecting(false);
                 break;
 
             } catch (err: any) {
                 if (retryCount < maxRetries) {
-                    addLog(`Connection attempt failed: ${err.message}. Waiting 1s before retry...`);
                     retryCount++;
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 } else {
-                    addLog(`Connection Error after retries: ${err.message}`);
+                    addLog(`Disconnected`);
                     setIsConnecting(false);
                     break;
                 }
@@ -151,17 +138,16 @@ export const useBLE = () => {
     };
 
     const disconnect = async () => {
+        manager.stopDeviceScan();
         if (connectedDevice) {
             try {
                 await connectedDevice.cancelConnection();
-                addLog('Disconnected.');
-            } catch (err: any) {
-                addLog(`Disconnect Error: ${err.message}`);
-            } finally {
-                setConnectedDevice(null);
-                setLastPacket(null);
-            }
+            } catch (e: any) {}
+            setConnectedDevice(null);
         }
+        setLastPacket(null);
+        setIsConnecting(false);
+        addLog('Ready to Scan');
     };
 
     const sendData = async (data: string) => {
@@ -173,10 +159,13 @@ export const useBLE = () => {
                 NUS_RX_CHARACTERISTIC_UUID,
                 base64Data
             );
-            addLog(`Sent: ${data}`);
         } catch (err: any) {
             addLog(`Send Error: ${err.message}`);
         }
+    };
+
+    const reset = async () => {
+        await disconnect();
     };
 
     const deviceRef = useRef<Device | null>(null);
@@ -198,8 +187,9 @@ export const useBLE = () => {
     return {
         connectToDevice,
         disconnect,
+        reset,
         connectedDevice,
-        logs,
+        statusMessage,
         isConnecting,
         sendData,
         lastPacket
