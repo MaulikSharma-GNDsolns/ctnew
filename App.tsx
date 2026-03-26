@@ -16,9 +16,27 @@ export default function App() {
         connectToDevice(data);
     };
 
+    const [selectedSensor, setSelectedSensor] = useState<'accel' | 'gyro' | 'mag'>('accel');
+
     const handleBack = () => {
         reset();
     };
+
+    const SensorTabs = () => (
+        <View className="flex-row bg-slate-100 p-1.5 rounded-2xl mb-4">
+            {(['accel', 'gyro', 'mag'] as const).map((tab) => (
+                <TouchableOpacity
+                    key={tab}
+                    onPress={() => setSelectedSensor(tab)}
+                    className={`flex-1 py-2 rounded-xl items-center ${selectedSensor === tab ? 'bg-white shadow-sm' : ''}`}
+                >
+                    <Text className={`text-[10px] font-black uppercase tracking-widest ${selectedSensor === tab ? 'text-blue-500' : 'text-slate-400'}`}>
+                        {tab === 'accel' ? 'Accelerometer' : tab === 'gyro' ? 'Gyroscope' : 'Magnetometer'}
+                    </Text>
+                </TouchableOpacity>
+            ))}
+        </View>
+    );
 
     return (
         <SafeAreaProvider>
@@ -75,7 +93,7 @@ export default function App() {
                             {/* Summary Cards */}
                             {lastPacket ? (
                                 <View>
-                                    <View className="flex-row -m-2">
+                                    <View className="flex-row -m-2 mb-4">
                                         <SensorCard 
                                             title="Battery" 
                                             value={lastPacket.battery} 
@@ -90,15 +108,14 @@ export default function App() {
                                         />
                                     </View>
 
-                                    {/* Tabular Data */}
-                                    <View className="mt-4">
-                                        <Text className="mx-2 text-slate-400 text-[10px] font-bold uppercase tracking-widest mb-1">Motion Analysis</Text>
-                                        <SensorTable data={{
-                                            accelerometer: lastPacket.accelerometer,
-                                            gyroscope: lastPacket.gyroscope,
-                                            magnetometer: lastPacket.magnetometer
-                                        }} />
-                                    </View>
+                                    {/* Tab Selector */}
+                                    <SensorTabs />
+
+                                    {/* High Density Table */}
+                                    <SensorTable 
+                                        label={selectedSensor === 'accel' ? 'Accelerometer' : selectedSensor === 'gyro' ? 'Gyroscope' : 'Magnetometer'}
+                                        data={selectedSensor === 'accel' ? lastPacket.accelerometer : selectedSensor === 'gyro' ? lastPacket.gyroscope : lastPacket.magnetometer}
+                                    />
 
                                     {/* Stats Footer */}
                                     <View className="mt-6 items-center">
