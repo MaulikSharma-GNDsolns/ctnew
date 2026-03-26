@@ -28,11 +28,11 @@ export const useBLE = () => {
         if (connectedDevice) {
             await disconnect();
         }
-        
+
         setIsConnecting(true);
         setLastPacket(null);
         addLog(`Scanning...`);
-        
+
         const hasPermissions = await requestBluetoothPermissions();
         if (!hasPermissions) {
             addLog('Permissions Denied');
@@ -51,7 +51,7 @@ export const useBLE = () => {
                 if (device && (device.name === deviceName || device.localName === deviceName)) {
                     manager.stopDeviceScan();
                     addLog(`Found ${deviceName}. Stabilizing...`);
-                    await new Promise(resolve => setTimeout(resolve, 1500));
+                    await new Promise(resolve => setTimeout(resolve, 200));
                     addLog(`Connecting...`);
                     await setupDevice(device, deviceName);
                 }
@@ -79,7 +79,7 @@ export const useBLE = () => {
             try {
                 let connected = device;
                 const isAlreadyConnected = await device.isConnected();
-                
+
                 if (!isAlreadyConnected) {
                     if (retryCount > 0) addLog(`Retrying...`);
                     connected = await device.connect({ autoConnect: false, timeout: 15000 });
@@ -88,12 +88,12 @@ export const useBLE = () => {
                 addLog('Negotiating...');
                 try {
                     await connected.requestMTU(512);
-                } catch (mtuErr) {}
+                } catch (mtuErr) { }
 
                 addLog('Preparing Services...');
-                await new Promise(resolve => setTimeout(resolve, 1500));
+                await new Promise(resolve => setTimeout(resolve, 200));
                 await connected.discoverAllServicesAndCharacteristics();
-                
+
                 setConnectedDevice(connected);
                 addLog(`Live Data Active`);
 
@@ -120,7 +120,7 @@ export const useBLE = () => {
                         }
                     }
                 );
-                
+
                 setIsConnecting(false);
                 break;
 
@@ -142,7 +142,7 @@ export const useBLE = () => {
         if (connectedDevice) {
             try {
                 await connectedDevice.cancelConnection();
-            } catch (e: any) {}
+            } catch (e: any) { }
             setConnectedDevice(null);
         }
         setLastPacket(null);
@@ -178,7 +178,7 @@ export const useBLE = () => {
     useEffect(() => {
         return () => {
             if (deviceRef.current) {
-                deviceRef.current.cancelConnection().catch(() => {});
+                deviceRef.current.cancelConnection().catch(() => { });
             }
             manager.destroy();
         };
