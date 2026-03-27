@@ -4,6 +4,7 @@ import { Buffer } from 'buffer';
 
 import { requestBluetoothPermissions } from '../utils/permissions';
 import { ProtocolParser, ParsedPacket } from '../utils/parser';
+import { mqttService } from '../services/mqttService';
 
 const NUS_SERVICE_UUID = 'e9bcfbf3-bf6b-4f50-bb26-d2b64297c8c6';
 const NUS_TX_CHARACTERISTIC_UUID = 'e9bcfbf5-bf6b-4f50-bb26-d2b64297c8c6'; // Notify from device
@@ -16,6 +17,7 @@ export const useBLE = () => {
     const [isConnecting, setIsConnecting] = useState(false);
     const [lastPacket, setLastPacket] = useState<ParsedPacket | null>(null);
     const [statusMessage, setStatusMessage] = useState<string>('Ready to scan');
+    const [mqttStatus, setMqttStatus] = useState(false);
 
     const addLog = (message: string) => {
         console.log(`[BLE]: ${message}`);
@@ -116,6 +118,8 @@ export const useBLE = () => {
                             const packet = parser.addData(buffer);
                             if (packet) {
                                 setLastPacket(packet);
+                                // Relay to Cloud
+                                mqttService.publish(packet);
                             }
                         }
                     }
@@ -174,6 +178,14 @@ export const useBLE = () => {
         deviceRef.current = connectedDevice;
     }, [connectedDevice]);
 
+    // Initialize MQTT on mount
+    useEffect(() => {
+        mqttService.connect((connected) => {
+            setMqttStatus(connected);
+        });
+        return () => mqttService.disconnect();
+    }, []);
+
     // Cleanup manager and persistent connections ONLY on unmount
     useEffect(() => {
         return () => {
@@ -192,6 +204,7 @@ export const useBLE = () => {
         statusMessage,
         isConnecting,
         sendData,
-        lastPacket
+        lastPacket,
+        mqttStatus
     };
 };

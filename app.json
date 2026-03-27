@@ -26,7 +26,8 @@
         {
           "cameraPermission": "Allow $(PRODUCT_NAME) to access camera"
         }
-      ]
+      ],
+      "./plugins/withAsyncStorageRepo"
     ],
     "orientation": "portrait",
     "icon": "./assets/icon.png",
