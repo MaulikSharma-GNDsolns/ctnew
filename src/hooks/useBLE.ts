@@ -118,8 +118,8 @@ export const useBLE = () => {
                             const packet = parser.addData(buffer);
                             if (packet) {
                                 setLastPacket(packet);
-                                // Relay to Cloud
-                                mqttService.publish(packet);
+                                // Data received - ready for manual cloud push
+                                console.log(`📦 [BLE] New packet received - ready to push to cloud`);
                             }
                         }
                     }

@@ -169,10 +169,10 @@ class MqttService {
         }
     }
 
-    public async publish(data: any) {
+    public async publish(data: any): Promise<boolean> {
         if (!this.client) {
             console.warn('⚠️ [MQTT] CANNOT PUBLISH: No active client connection exists.');
-            return;
+            return false;
         }
 
         const payload = JSON.stringify({
@@ -190,18 +190,23 @@ class MqttService {
         console.log(`   Topic: ${MQTT_CONFIG.topics.uplink}`);
         console.log(`   Payload: ${payload}`);
 
-        try {
-            this.client.publish(MQTT_CONFIG.topics.uplink, payload, {}, (err: any) => {
-                if (err) {
-                    console.error("❌ [MQTT] PUBLISH FAILED (Protocol Level):", err.message);
-                    console.error("   Detailed Error:", err);
-                } else {
-                    console.log("✅ [MQTT] PUBLISH CONFIRMED by AWS IoT Core.");
-                }
-            });
-        } catch (error: any) {
-            console.error('❌ [MQTT] PUBLISH INVOCATION FAILED (App Level):', error.message);
-        }
+        return new Promise((resolve) => {
+            try {
+                this.client.publish(MQTT_CONFIG.topics.uplink, payload, {}, (err: any) => {
+                    if (err) {
+                        console.error("❌ [MQTT] PUBLISH FAILED (Protocol Level):", err.message);
+                        console.error("   Detailed Error:", err);
+                        resolve(false);
+                    } else {
+                        console.log("✅ [MQTT] PUBLISH CONFIRMED by AWS IoT Core.");
+                        resolve(true);
+                    }
+                });
+            } catch (error: any) {
+                console.error('❌ [MQTT] PUBLISH INVOCATION FAILED (App Level):', error.message);
+                resolve(false);
+            }
+        });
     }
 
     public async disconnect() {

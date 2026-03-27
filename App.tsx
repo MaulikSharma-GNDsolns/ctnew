@@ -22,7 +22,11 @@ import './global.css';
 
 export default function App() {
   const [showScanner, setShowScanner] = useState(false);
+  const [selectedSensor, setSelectedSensor] = useState<'accel' | 'gyro' | 'mag'>('accel');
+  const [isCloudUploading, setIsCloudUploading] = useState(false);
+  const [cloudUploadSuccess, setCloudUploadSuccess] = useState(false);
   const scaleAnim = useRef(new Animated.Value(1)).current;
+  const tickAnim = useRef(new Animated.Value(0)).current;
   const {
     connectToDevice,
     disconnect,
@@ -33,6 +37,14 @@ export default function App() {
     statusMessage,
     mqttStatus,
   } = useBLE();
+
+  // Reset cloud upload success when new data arrives
+  useEffect(() => {
+    if (lastPacket && cloudUploadSuccess) {
+      setCloudUploadSuccess(false);
+      tickAnim.setValue(0);
+    }
+  }, [lastPacket]);
 
   const handleScanPress = () => {
     // Animate button press
@@ -58,7 +70,41 @@ export default function App() {
     connectToDevice(data);
   };
 
-  const [selectedSensor, setSelectedSensor] = useState<'accel' | 'gyro' | 'mag'>('accel');
+  const handleCloudPress = async () => {
+    // Animate button press
+    Animated.sequence([
+      Animated.timing(scaleAnim, {
+        toValue: 0.85,
+        duration: 100,
+        useNativeDriver: true,
+      }),
+      Animated.timing(scaleAnim, {
+        toValue: 1,
+        duration: 100,
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    if (lastPacket && !isCloudUploading && !cloudUploadSuccess) {
+      setIsCloudUploading(true);
+      try {
+        const success = await mqttService.publish(lastPacket);
+        if (success) {
+          setCloudUploadSuccess(true);
+          // Animate tick mark
+          Animated.timing(tickAnim, {
+            toValue: 1,
+            duration: 500,
+            useNativeDriver: true,
+          }).start();
+        }
+      } catch (error) {
+        console.error('Cloud upload failed:', error);
+      } finally {
+        setIsCloudUploading(false);
+      }
+    }
+  };
 
   const handleBack = () => {
     reset();
@@ -174,8 +220,10 @@ export default function App() {
                 {isConnecting || (connectedDevice && !lastPacket) ? (
                   <View className="items-center">
                     <ActivityIndicator size="large" color="#3B82F6" className="mb-6" />
-                    <Text className="animate-pulse text-lg font-bold italic text-slate-900">
-                      {connectedDevice ? 'Awaiting Sensor Data...' : 'Establishing Sensor Link...'}
+                    <Text
+                      numberOfLines={1}
+                      className="animate-pulse text-lg font-bold italic text-slate-900">
+                      {connectedDevice ? 'Awaiting Sensor Data' : 'Establishing Sensor Link'}
                     </Text>
                   </View>
                 ) : (
@@ -215,6 +263,58 @@ export default function App() {
                 />
               </TouchableOpacity>
             </Animated.View>
+            <Text className="mt-2 text-center text-sm font-bold text-blue-500">
+              {isConnecting ? 'RESCAN' : 'SCAN'}
+            </Text>
+          </View>
+        )}
+
+        {/* Cloud Upload Button - Only show when connected and have data */}
+        {connectedDevice && lastPacket && (
+          <View className="absolute bottom-7 left-0 right-0 items-center pb-8">
+            <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
+              <TouchableOpacity
+                onPress={handleCloudPress}
+                disabled={isCloudUploading || cloudUploadSuccess}
+                className={`h-24 w-24 items-center justify-center rounded-full border-2 bg-white shadow-lg ${
+                  cloudUploadSuccess
+                    ? 'border-green-500'
+                    : isCloudUploading
+                      ? 'border-orange-500'
+                      : 'border-blue-500'
+                }`}
+                style={{
+                  shadowColor: cloudUploadSuccess
+                    ? '#10B981'
+                    : isCloudUploading
+                      ? '#F97316'
+                      : '#3B82F6',
+                  shadowOffset: { width: 0, height: 8 },
+                  shadowOpacity: 0.4,
+                  shadowRadius: 12,
+                  elevation: 12,
+                }}>
+                {isCloudUploading ? (
+                  <ActivityIndicator size="large" color="#F97316" />
+                ) : cloudUploadSuccess ? (
+                  <Animated.View style={{ opacity: tickAnim }}>
+                    <Image
+                      source={require('./assets/tick.png')}
+                      style={{ width: 50, height: 50 }}
+                    />
+                  </Animated.View>
+                ) : (
+                  <Image source={require('./assets/cloud.jpg')} style={{ width: 57, height: 57 }} />
+                )}
+              </TouchableOpacity>
+            </Animated.View>{' '}
+            <Text className="mt-2 text-center text-sm font-bold text-blue-500">
+              {cloudUploadSuccess
+                ? 'UPLOADED'
+                : isCloudUploading
+                  ? 'UPLOADING...'
+                  : 'PUSH TO CLOUD'}
+            </Text>{' '}
           </View>
         )}
 
