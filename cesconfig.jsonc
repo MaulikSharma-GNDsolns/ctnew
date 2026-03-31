@@ -2,12 +2,12 @@
 // It is safe to delete this file as it does not affect the functionality of your application.
 {
   "cesVersion": "2.21.3",
-  "projectName": "my-expo-app",
+  "projectName": "C-tag",
   "packages": [
     {
       "name": "nativewind",
-      "type": "styling"
-    }
+      "type": "styling",
+    },
   ],
   "flags": {
     "noGit": false,
@@ -16,16 +16,16 @@
     "importAlias": true,
     "packageManager": "npm",
     "eas": false,
-    "publish": false
+    "publish": false,
   },
   "packageManager": {
     "type": "npm",
-    "version": "11.11.0"
+    "version": "11.11.0",
   },
   "os": {
     "type": "Windows_NT",
     "platform": "win32",
     "arch": "x64",
-    "kernelVersion": "10.0.26200"
-  }
+    "kernelVersion": "10.0.26200",
+  },
 }
