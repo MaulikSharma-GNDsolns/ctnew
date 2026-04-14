@@ -62,7 +62,7 @@ export default function App() {
     ]).start();
 
     setShowScanner(true);
-    mqttService.sendTestMessage();
+    // sendTestMessage removed — publish only via the Cloud button
   };
 
   const handleQRScanned = (data: string) => {

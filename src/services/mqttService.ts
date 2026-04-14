@@ -1,221 +1,179 @@
-import { Buffer } from 'buffer';
-// @ts-ignore
-import AWS from "aws-sdk/dist/aws-sdk-react-native";
-// @ts-ignore
-import awsIot from "aws-iot-device-sdk";
-import { MQTT_CONFIG } from '../config/mqttCertificates';
+import { NativeModules, NativeEventEmitter } from 'react-native';
+import { MQTT_CONFIG, ROOT_CA, DEVICE_CERT, PRIVATE_KEY } from '../config/mqttCertificates';
+import { ParsedPacket } from '../utils/parser';
 
-// @ts-ignore
-if (typeof global.crypto === 'undefined') {
-    // @ts-ignore
-    global.crypto = {
-        getRandomValues: (array: any) => {
-            for (let i = 0; i < array.length; i++) {
-                array[i] = Math.floor(Math.random() * 256);
-            }
-            return array;
-        }
-    };
-}
+const { MqttCertModule } = NativeModules;
+const mqttEventEmitter = new NativeEventEmitter(MqttCertModule);
 
 class MqttService {
-    private client: any = null;
+    private isConnected: boolean = false;
     private onStatusChange: ((connected: boolean) => void) | null = null;
+    private statusSubscription: any = null;
+    private messageSubscription: any = null;
+    private mobileNumber: string = '0000000000'; // default; set via setMobileNumber()
+
+    constructor() {
+        this.statusSubscription = mqttEventEmitter.addListener('onMqttStatusChange', (event) => {
+            console.log('[MQTT Native] Status Changed:', event.connected, event.error ? `| Reason: ${event.error}` : '');
+            this.isConnected = event.connected;
+            this.onStatusChange?.(this.isConnected);
+        });
+
+        this.messageSubscription = mqttEventEmitter.addListener('onMqttMessage', (event) => {
+            console.log('[MQTT Native] 📩 Message on', event.topic, ':', event.payload);
+        });
+    }
+
+    /** Set the mobile number used in gateway_id (format: MOB<number>) */
+    public setMobileNumber(number: string) {
+        this.mobileNumber = number.replace(/[^0-9]/g, ''); // digits only
+    }
 
     public async connect(onStatusChange: (connected: boolean) => void) {
-        if (this.client) {
-            console.log('[MQTT] ALREADY CONNECTED: Client already exists');
+        if (this.isConnected) {
+            console.log('[MQTT] Already connected.');
             return;
         }
         this.onStatusChange = onStatusChange;
 
-        console.log('[MQTT] STEP 1: Initializing Legacy AWS Config...');
-        console.log('[MQTT] Using Region:', MQTT_CONFIG.region);
-        console.log('[MQTT] Using IdentityPoolId:', MQTT_CONFIG.identityPoolId);
+        console.log('[MQTT] STEP 1: Initializing Native Certificate-Based Connection...');
+        console.log('[MQTT] Host :', MQTT_CONFIG.host);
+        console.log('[MQTT] Port :', MQTT_CONFIG.port);
+        console.log('[MQTT] ID   :', MQTT_CONFIG.clientId);
 
-        AWS.config.region = MQTT_CONFIG.region;
-        AWS.config.credentials = new AWS.CognitoIdentityCredentials({
-            IdentityPoolId: MQTT_CONFIG.identityPoolId,
-        });
-
-        console.log('[MQTT] STEP 2: Fetching Cognito Credentials...');
-        // @ts-ignore
-        AWS.config.credentials.get((err: any) => {
-            if (err) {
-                console.error("❌ [MQTT] ERROR: Cognito Credential Fetch Failed:", err.message);
-                console.error("❌ [MQTT] ERROR DETAILED:", err);
-                this.onStatusChange?.(false);
-                return;
-            }
-
-            console.log("✅ [MQTT] STEP 3: Cognito Identity Credentials Fetched Successfully.");
-            console.log("[MQTT] Cognito Identity ID:", AWS.config.credentials.identityId);
-            
-            // Log the actual credentials being used (for debugging - remove in production)
-            console.log("🔑 [MQTT] AccessKeyId:", AWS.config.credentials.accessKeyId);
-            console.log("🔑 [MQTT] SecretAccessKey:", AWS.config.credentials.secretAccessKey?.substring(0, 10) + "..."); // Partial for security
-            console.log("🔑 [MQTT] SessionToken:", AWS.config.credentials.sessionToken?.substring(0, 20) + "..."); // Partial for security
-            
-            // Refresh credentials for React Native compatibility
-            AWS.config.credentials.refresh((err) => {
-                if (err) {
-                    console.error("❌ Credential refresh failed", err);
-                    // Still try to connect with current credentials
-                    this.establishConnection();
-                } else {
-                    console.log("✅ Credentials refreshed");
-                    // Log refreshed credentials
-                    console.log("🔄 [MQTT] Refreshed AccessKeyId:", AWS.config.credentials.accessKeyId);
-                    console.log("🔄 [MQTT] Refreshed SecretAccessKey:", AWS.config.credentials.secretAccessKey?.substring(0, 10) + "...");
-                    console.log("🔄 [MQTT] Refreshed SessionToken:", AWS.config.credentials.sessionToken?.substring(0, 20) + "...");
-                    this.establishConnection();
-                }
-            });
-        });
-    }
-
-    private establishConnection() {
-        console.log('[MQTT] STEP 4: Initializing IoT Device Client...');
-        console.log('[MQTT] Connecting to Host:', MQTT_CONFIG.host);
-        console.log('[MQTT] Client ID:', MQTT_CONFIG.clientId);
-        
         try {
-            this.client = awsIot.device({
-                region: MQTT_CONFIG.region,
-                host: MQTT_CONFIG.host,
-                protocol: "wss",
-                // @ts-ignore
-                accessKeyId: AWS.config.credentials.accessKeyId,
-                // @ts-ignore
-                secretKey: AWS.config.credentials.secretAccessKey,
-                // @ts-ignore
-                sessionToken: AWS.config.credentials.sessionToken,
-                clientId: MQTT_CONFIG.clientId,
-                reconnectPeriod: 5000,
-                keepalive: 300, // 5 minutes
-                resubscribe: true,
-                connectTimeout: 10000, // 10 seconds
-            });
-
-            this.client.on("connect", () => {
-                console.log("✅ [MQTT] STEP 5: CONNECTED TO AWS IOT CORE SUCCESSFUL");
-                console.log("   Connected with Client ID:", MQTT_CONFIG.clientId);
-                this.onStatusChange?.(true);
-                
-                console.log("[MQTT] Subscribing to Uplink Topic:", MQTT_CONFIG.topics.uplink);
-                this.client.subscribe(MQTT_CONFIG.topics.uplink, { qos: 1 }, (err, granted) => {
-                    if (err) {
-                        console.error("❌ [MQTT] Failed to subscribe to uplink:", err);
-                    } else {
-                        console.log("✅ [MQTT] Successfully subscribed to uplink:", granted);
-                    }
-                });
-            });
-
-            this.client.on("message", (topic: string, payload: any) => {
-                console.log("📩 [MQTT] INCOMING MESSAGE RECEIVED:");
-                console.log("   Topic:", topic);
-                console.log("   Payload:", payload.toString());
-            });
-
-            this.client.on("error", (error: any) => {
-                console.error("❌ [MQTT] CLIENT ERROR OCCURRED");
-                console.error("   Message:", error.message);
-                console.error("   Detailed Error:", error);
-                this.onStatusChange?.(false);
-            });
-
-            this.client.on("close", () => {
-                console.warn("⚠️ [MQTT] CONNECTION CLOSED BY REMOTE/LOCAL HOST");
-                console.warn("   Client ID:", MQTT_CONFIG.clientId);
-                console.warn("   Host:", MQTT_CONFIG.host);
-                console.warn("   Checking if credentials are still valid...");
-                
-                // Check if credentials are expired
-                if (AWS.config.credentials && AWS.config.credentials.expireTime) {
-                    const now = new Date();
-                    const expireTime = new Date(AWS.config.credentials.expireTime);
-                    console.warn("   Credentials expire at:", expireTime.toISOString());
-                    console.warn("   Current time:", now.toISOString());
-                    console.warn("   Time until expiry:", Math.floor((expireTime.getTime() - now.getTime()) / 1000), "seconds");
-                }
-                
-                this.onStatusChange?.(false);
-            });
-
-            this.client.on("reconnect", () => {
-                console.log("🔄 [MQTT] RECONNECTING... (Attempting to restore session)");
-            });
-
+            await MqttCertModule.connect(
+                MQTT_CONFIG.host,
+                MQTT_CONFIG.port,
+                MQTT_CONFIG.clientId,
+                ROOT_CA,
+                DEVICE_CERT,
+                PRIVATE_KEY,
+                MQTT_CONFIG.topics.uplink
+            );
+            console.log('✅ [MQTT] CONNACK received — waiting for connectComplete event...');
         } catch (error: any) {
-            console.error("❌ [MQTT] CONNECTION INITIALIZATION FAILED:", error.message);
+            console.error("❌ [MQTT] NATIVE CONNECTION FAILED:", error.message ?? error);
             this.onStatusChange?.(false);
         }
     }
 
     public async sendTestMessage() {
-        if (!this.client) return;
-        
+        if (!this.isConnected) {
+            console.warn('[MQTT] sendTestMessage: not connected');
+            return;
+        }
         const payload = JSON.stringify({
-            msg: "testing sample data from ctag mobile app to aws cloud",
-            timestamp: new Date().toISOString()
+            evt: "SAMPLES",
+            gateway_id: `MOB${this.mobileNumber}`,
+            packet_number: 0,
+            utc_time: Math.floor(Date.now() / 1000),
+            access_token: "asdfghjklasdfghjk",
+            signal_strength: -12,
+            comm_mode: "cellular",
+            powered_by: "battery",
+            battery: 92,
+            sensor_data: "test_message"
         });
-
         try {
-            this.client.publish(MQTT_CONFIG.topics.uplink, payload);
-            console.log("✅ [MQTT] Test Message Published");
+            await MqttCertModule.publish(MQTT_CONFIG.topics.uplink, payload, 1);
+            console.log("✅ [MQTT] Test message published");
         } catch (error: any) {
-            console.error('[MQTT] Test Publish failed:', error.message);
+            console.error('[MQTT] Test publish failed:', error.message);
         }
     }
 
-    public async publish(data: any): Promise<boolean> {
-        if (!this.client) {
-            console.warn('⚠️ [MQTT] CANNOT PUBLISH: No active client connection exists.');
+    /**
+     * Publish sensor data in the gateway-compatible format.
+     *
+     * sensor_data CSV format (per sample):
+     *   accelX,accelY,accelZ,gyroX,gyroY,gyroZ,magX,magY,magZ
+     * Samples are comma-separated in a single string along with a header.
+     */
+    public async publish(data: ParsedPacket): Promise<boolean> {
+        if (!this.isConnected) {
+            console.warn('⚠️ [MQTT] Cannot publish — not connected.');
             return false;
         }
 
+        // Build the sensor_data CSV string
+        const sensorDataStr = this.buildSensorDataString(data);
+
         const payload = JSON.stringify({
-            timestamp: new Date().toISOString(),
-            deviceId: data.deviceId,
-            battery: data.battery,
-            temperature: data.temperature,
-            packetNumber: data.packetNumber,
-            accelerometer: data.accelerometer,
-            gyroscope: data.gyroscope,
-            magnetometer: data.magnetometer
+            evt: "SAMPLES",
+            gateway_id: `MOB${this.mobileNumber}`,
+            packet_number: data.packetNumber,
+            utc_time: Math.floor(Date.now() / 1000),
+            access_token: "asdfghjklasdfghjk",
+            signal_strength: -12,
+            comm_mode: "cellular",
+            powered_by: "battery",
+            battery: 92,
+            sensor_data: sensorDataStr
         });
 
-        console.log(`📤 [MQTT] ATTEMPTING TO PUSH DATA...`);
-        console.log(`   Topic: ${MQTT_CONFIG.topics.uplink}`);
-        console.log(`   Payload: ${payload}`);
+        console.log(`📤 [MQTT] Publishing to ${MQTT_CONFIG.topics.uplink}`);
+        console.log(`   Packet #${data.packetNumber} | ${data.accelerometer.length} samples`);
 
-        return new Promise((resolve) => {
-            try {
-                this.client.publish(MQTT_CONFIG.topics.uplink, payload, {}, (err: any) => {
-                    if (err) {
-                        console.error("❌ [MQTT] PUBLISH FAILED (Protocol Level):", err.message);
-                        console.error("   Detailed Error:", err);
-                        resolve(false);
-                    } else {
-                        console.log("✅ [MQTT] PUBLISH CONFIRMED by AWS IoT Core.");
-                        resolve(true);
-                    }
-                });
-            } catch (error: any) {
-                console.error('❌ [MQTT] PUBLISH INVOCATION FAILED (App Level):', error.message);
-                resolve(false);
-            }
-        });
+        try {
+            await MqttCertModule.publish(MQTT_CONFIG.topics.uplink, payload, 1);
+            console.log("✅ [MQTT] Publish confirmed.");
+            return true;
+        } catch (error: any) {
+            console.error('❌ [MQTT] Publish failed:', error.message);
+            return false;
+        }
+    }
+
+    /**
+     * Build the sensor_data string from parsed packet.
+     *
+     * Format matches the gateway protocol:
+     * "00000,<deviceId>,00:00:00:00:00:00,0,<temperature>,<sampledTime>,100,100,
+     *  <battery>,<numSamples>,<accelX>,<accelY>,<accelZ>,<gyroX>,<gyroY>,<gyroZ>,
+     *  <magX>,<magY>,<magZ>,..."
+     */
+    private buildSensorDataString(data: ParsedPacket): string {
+        const parts: (string | number)[] = [];
+
+        // Header fields
+        parts.push("00000");                           // placeholder
+        parts.push(data.deviceId);                     // sensor ID
+        parts.push("00:00:00:00:00:00");               // MAC placeholder
+        parts.push(0);                                 // reserved
+        parts.push(Math.round(data.temperature * 100)); // temperature (raw, *100)
+        parts.push(data.sampledTime);                  // sampled time from sensor
+        parts.push(100);                               // sample rate placeholder
+        parts.push(100);                               // sample rate placeholder
+        parts.push(data.battery);                      // battery from sensor
+        parts.push(data.accelerometer.length);         // number of samples
+
+        // Per-sample data: accelX,accelY,accelZ,gyroX,gyroY,gyroZ,magX,magY,magZ
+        for (let i = 0; i < data.accelerometer.length; i++) {
+            const a = data.accelerometer[i];
+            const g = data.gyroscope[i];
+            const m = data.magnetometer[i];
+            parts.push(a.x, a.y, a.z);
+            parts.push(g.x, g.y, g.z);
+            parts.push(m.x, m.y, m.z);
+        }
+
+        return parts.join(',');
     }
 
     public async disconnect() {
-        if (this.client) {
-            console.log('[MQTT] Disconnecting...');
-            this.client.end();
-            this.client = null;
-            this.onStatusChange?.(false);
+        try {
+            await MqttCertModule.disconnect();
+        } catch (error: any) {
+            console.error('[MQTT] Disconnect error:', error.message);
+        } finally {
+            this.isConnected = false;
         }
+    }
+
+    public destroy() {
+        this.statusSubscription?.remove();
+        this.messageSubscription?.remove();
     }
 }
 
