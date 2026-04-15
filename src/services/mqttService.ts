@@ -1,4 +1,5 @@
 import { Buffer } from 'buffer';
+import CryptoJS from 'crypto-js';
 // @ts-ignore
 import AWS from "aws-sdk/dist/aws-sdk-react-native";
 // @ts-ignore
@@ -29,47 +30,93 @@ class MqttService {
         }
         this.onStatusChange = onStatusChange;
 
-        console.log('[MQTT] STEP 1: Initializing Legacy AWS Config...');
+        console.log('[MQTT] STEP 1: Initializing AWS Config...');
         console.log('[MQTT] Using Region:', MQTT_CONFIG.region);
         console.log('[MQTT] Using IdentityPoolId:', MQTT_CONFIG.identityPoolId);
 
         AWS.config.region = MQTT_CONFIG.region;
-        AWS.config.credentials = new AWS.CognitoIdentityCredentials({
-            IdentityPoolId: MQTT_CONFIG.identityPoolId,
-        });
 
-        console.log('[MQTT] STEP 2: Fetching Cognito Credentials...');
-        // @ts-ignore
-        AWS.config.credentials.get((err: any) => {
-            if (err) {
-                console.error("❌ [MQTT] ERROR: Cognito Credential Fetch Failed:", err.message);
-                console.error("❌ [MQTT] ERROR DETAILED:", err);
-                this.onStatusChange?.(false);
-                return;
+        try {
+            // STEP 2: Sign in to Cognito User Pool to get ID Token
+            console.log('[MQTT] STEP 2: Signing in to Cognito User Pool...');
+            const idToken = await this.getUserPoolIdToken();
+            console.log('✅ [MQTT] STEP 2: User Pool sign-in successful, ID token obtained.');
+
+            // STEP 3: Exchange ID Token for authenticated Identity Pool credentials
+            console.log('[MQTT] STEP 3: Fetching authenticated Cognito Identity Credentials...');
+            const loginKey = `cognito-idp.${MQTT_CONFIG.region}.amazonaws.com/${MQTT_CONFIG.userPoolId}`;
+            AWS.config.credentials = new AWS.CognitoIdentityCredentials({
+                IdentityPoolId: MQTT_CONFIG.identityPoolId,
+                Logins: {
+                    [loginKey]: idToken,
+                },
+            });
+
+            // @ts-ignore
+            AWS.config.credentials.get((err: any) => {
+                if (err) {
+                    console.error("❌ [MQTT] ERROR: Cognito Credential Fetch Failed:", err.message);
+                    console.error("❌ [MQTT] ERROR DETAILED:", err);
+                    this.onStatusChange?.(false);
+                    return;
+                }
+
+                console.log("✅ [MQTT] STEP 3: Authenticated Identity Credentials obtained.");
+                console.log("[MQTT] Cognito Identity ID:", AWS.config.credentials.identityId);
+                console.log("🔑 [MQTT] AccessKeyId:", AWS.config.credentials.accessKeyId);
+                console.log("🔑 [MQTT] SessionToken:", AWS.config.credentials.sessionToken?.substring(0, 20) + "...");
+
+                this.establishConnection();
+            });
+        } catch (err: any) {
+            console.error("❌ [MQTT] STEP 2 FAILED: User Pool sign-in error:", err.message);
+            console.error("❌ [MQTT] ERROR DETAILED:", err);
+            this.onStatusChange?.(false);
+        }
+    }
+
+    /**
+     * Signs in to Cognito User Pool using USER_PASSWORD_AUTH flow.
+     * Returns the ID Token string for use in the Identity Pool Logins map.
+     */
+    private getUserPoolIdToken(): Promise<string> {
+        return new Promise((resolve, reject) => {
+            const cognitoISP = new AWS.CognitoIdentityServiceProvider({
+                region: MQTT_CONFIG.region,
+            });
+
+            // SECRET_HASH is only required when the App Client has a secret configured
+            const authParameters: Record<string, string> = {
+                USERNAME: MQTT_CONFIG.serviceAccount.email,
+                PASSWORD: MQTT_CONFIG.serviceAccount.password,
+            };
+            if (MQTT_CONFIG.userPoolClientSecret) {
+                // SECRET_HASH = Base64( HMAC-SHA256( username + clientId, clientSecret ) )
+                const hmac = CryptoJS.HmacSHA256(
+                    MQTT_CONFIG.serviceAccount.email + MQTT_CONFIG.userPoolClientId,
+                    MQTT_CONFIG.userPoolClientSecret,
+                );
+                authParameters.SECRET_HASH = CryptoJS.enc.Base64.stringify(hmac);
+                console.log('[MQTT] SECRET_HASH computed:', authParameters.SECRET_HASH.substring(0, 10) + '...');
             }
 
-            console.log("✅ [MQTT] STEP 3: Cognito Identity Credentials Fetched Successfully.");
-            console.log("[MQTT] Cognito Identity ID:", AWS.config.credentials.identityId);
-            
-            // Log the actual credentials being used (for debugging - remove in production)
-            console.log("🔑 [MQTT] AccessKeyId:", AWS.config.credentials.accessKeyId);
-            console.log("🔑 [MQTT] SecretAccessKey:", AWS.config.credentials.secretAccessKey?.substring(0, 10) + "..."); // Partial for security
-            console.log("🔑 [MQTT] SessionToken:", AWS.config.credentials.sessionToken?.substring(0, 20) + "..."); // Partial for security
-            
-            // Refresh credentials for React Native compatibility
-            AWS.config.credentials.refresh((err) => {
+            const params = {
+                AuthFlow: 'USER_PASSWORD_AUTH',
+                ClientId: MQTT_CONFIG.userPoolClientId,
+                AuthParameters: authParameters,
+            };
+
+            console.log('[MQTT] Calling InitiateAuth for:', MQTT_CONFIG.serviceAccount.email);
+            cognitoISP.initiateAuth(params, (err: any, data: any) => {
                 if (err) {
-                    console.error("❌ Credential refresh failed", err);
-                    // Still try to connect with current credentials
-                    this.establishConnection();
-                } else {
-                    console.log("✅ Credentials refreshed");
-                    // Log refreshed credentials
-                    console.log("🔄 [MQTT] Refreshed AccessKeyId:", AWS.config.credentials.accessKeyId);
-                    console.log("🔄 [MQTT] Refreshed SecretAccessKey:", AWS.config.credentials.secretAccessKey?.substring(0, 10) + "...");
-                    console.log("🔄 [MQTT] Refreshed SessionToken:", AWS.config.credentials.sessionToken?.substring(0, 20) + "...");
-                    this.establishConnection();
+                    console.error('[MQTT] InitiateAuth failed:', err.message);
+                    return reject(err);
                 }
+                const idToken = data?.AuthenticationResult?.IdToken;
+                if (!idToken) {
+                    return reject(new Error('InitiateAuth succeeded but no IdToken in response. Check AuthFlow or MFA settings.'));
+                }
+                resolve(idToken);
             });
         });
     }
