@@ -1,5 +1,6 @@
 import { Buffer } from 'buffer';
 import CryptoJS from 'crypto-js';
+import { CognitoUserPool, CognitoUser, AuthenticationDetails } from 'amazon-cognito-identity-js';
 // @ts-ignore
 import AWS from "aws-sdk/dist/aws-sdk-react-native";
 // @ts-ignore
@@ -38,7 +39,7 @@ class MqttService {
 
         try {
             // STEP 2: Sign in to Cognito User Pool to get ID Token
-            console.log('[MQTT] STEP 2: Signing in to Cognito User Pool...');
+            console.log('[MQTT] STEP 2: Signing in to Cognito User Pool (SRP Flow)...');
             const idToken = await this.getUserPoolIdToken();
             console.log('✅ [MQTT] STEP 2: User Pool sign-in successful, ID token obtained.');
 
@@ -76,47 +77,52 @@ class MqttService {
     }
 
     /**
-     * Signs in to Cognito User Pool using USER_PASSWORD_AUTH flow.
-     * Returns the ID Token string for use in the Identity Pool Logins map.
+     * Signs in to Cognito using amazon-cognito-identity-js (SRP flow).
+     * This avoids the "USER_PASSWORD_AUTH flow not enabled" error.
      */
     private getUserPoolIdToken(): Promise<string> {
         return new Promise((resolve, reject) => {
-            const cognitoISP = new AWS.CognitoIdentityServiceProvider({
-                region: MQTT_CONFIG.region,
+            const poolData = {
+                UserPoolId: MQTT_CONFIG.userPoolId,
+                ClientId: MQTT_CONFIG.userPoolClientId
+            };
+            const userPool = new CognitoUserPool(poolData);
+            
+            const authenticationDetails = new AuthenticationDetails({
+                Username: MQTT_CONFIG.serviceAccount.email,
+                Password: MQTT_CONFIG.serviceAccount.password,
             });
-
-            // SECRET_HASH is only required when the App Client has a secret configured
-            const authParameters: Record<string, string> = {
-                USERNAME: MQTT_CONFIG.serviceAccount.email,
-                PASSWORD: MQTT_CONFIG.serviceAccount.password,
-            };
-            if (MQTT_CONFIG.userPoolClientSecret) {
-                // SECRET_HASH = Base64( HMAC-SHA256( username + clientId, clientSecret ) )
-                const hmac = CryptoJS.HmacSHA256(
-                    MQTT_CONFIG.serviceAccount.email + MQTT_CONFIG.userPoolClientId,
-                    MQTT_CONFIG.userPoolClientSecret,
-                );
-                authParameters.SECRET_HASH = CryptoJS.enc.Base64.stringify(hmac);
-                console.log('[MQTT] SECRET_HASH computed:', authParameters.SECRET_HASH.substring(0, 10) + '...');
-            }
-
-            const params = {
-                AuthFlow: 'USER_PASSWORD_AUTH',
-                ClientId: MQTT_CONFIG.userPoolClientId,
-                AuthParameters: authParameters,
-            };
-
-            console.log('[MQTT] Calling InitiateAuth for:', MQTT_CONFIG.serviceAccount.email);
-            cognitoISP.initiateAuth(params, (err: any, data: any) => {
-                if (err) {
-                    console.error('[MQTT] InitiateAuth failed:', err.message);
-                    return reject(err);
+            
+            const cognitoUser = new CognitoUser({
+                Username: MQTT_CONFIG.serviceAccount.email,
+                Pool: userPool
+            });
+            
+            console.log('[MQTT] Calling authenticateUser for:', MQTT_CONFIG.serviceAccount.email);
+            
+            cognitoUser.authenticateUser(authenticationDetails, {
+                onSuccess: (result) => {
+                    resolve(result.getIdToken().getJwtToken());
+                },
+                onFailure: (err) => {
+                    console.error('[MQTT] authenticateUser failed:', err.message || err);
+                    reject(err);
+                },
+                newPasswordRequired: (userAttributes, requiredAttributes) => {
+                    console.log('[MQTT] Account requires password change (FORCE_CHANGE_PASSWORD state). Doing it automatically...');
+                    // Removing read-only attributes that cause errors if sent back
+                    delete userAttributes.email_verified;
+                    delete userAttributes.phone_number_verified;
+                    
+                    cognitoUser.completeNewPasswordChallenge(
+                        MQTT_CONFIG.serviceAccount.password, 
+                        userAttributes, 
+                        {
+                            onSuccess: (result: any) => resolve(result.getIdToken().getJwtToken()),
+                            onFailure: (err: any) => reject(err)
+                        }
+                    );
                 }
-                const idToken = data?.AuthenticationResult?.IdToken;
-                if (!idToken) {
-                    return reject(new Error('InitiateAuth succeeded but no IdToken in response. Check AuthFlow or MFA settings.'));
-                }
-                resolve(idToken);
             });
         });
     }
@@ -216,26 +222,38 @@ class MqttService {
         }
     }
 
+    private mobileNumber: string = '0000000000'; // default; set via setMobileNumber()
+
+    /** Set the mobile number used in gateway_id (format: MOB<number>) */
+    public setMobileNumber(number: string) {
+        this.mobileNumber = number.replace(/[^0-9]/g, ''); // digits only
+    }
+
     public async publish(data: any) {
         if (!this.client) {
             console.warn('⚠️ [MQTT] CANNOT PUBLISH: No active client connection exists.');
             return;
         }
 
+        // Build the sensor_data CSV string
+        const sensorDataStr = this.buildSensorDataString(data);
+
         const payload = JSON.stringify({
-            timestamp: new Date().toISOString(),
-            deviceId: data.deviceId,
-            battery: data.battery,
-            temperature: data.temperature,
-            packetNumber: data.packetNumber,
-            accelerometer: data.accelerometer,
-            gyroscope: data.gyroscope,
-            magnetometer: data.magnetometer
+            evt: "SAMPLES",
+            gateway_id: `MOB${this.mobileNumber}`,
+            packet_number: data.packetNumber,
+            utc_time: Math.floor(Date.now() / 1000),
+            access_token: "asdfghjklasdfghjk",
+            signal_strength: -12,
+            comm_mode: "cellular",
+            powered_by: "battery",
+            battery: 92,
+            sensor_data: sensorDataStr
         });
 
         console.log(`📤 [MQTT] ATTEMPTING TO PUSH DATA...`);
         console.log(`   Topic: ${MQTT_CONFIG.topics.uplink}`);
-        console.log(`   Payload: ${payload}`);
+        console.log(`   Packet #${data.packetNumber} | ${data.accelerometer?.length || 0} samples`);
 
         try {
             this.client.publish(MQTT_CONFIG.topics.uplink, payload, {}, (err: any) => {
@@ -249,6 +267,44 @@ class MqttService {
         } catch (error: any) {
             console.error('❌ [MQTT] PUBLISH INVOCATION FAILED (App Level):', error.message);
         }
+    }
+
+    /**
+     * Build the sensor_data string from parsed packet.
+     * 
+     * Format matches the gateway protocol:
+     * "00000,<deviceId>,00:00:00:00:00:00,0,<temperature>,<sampledTime>,100,100,
+     *  <battery>,<numSamples>,<accelX>,<accelY>,<accelZ>,<gyroX>,<gyroY>,<gyroZ>,
+     *  <magX>,<magY>,<magZ>,..."
+     */
+    private buildSensorDataString(data: any): string {
+        const parts: (string | number)[] = [];
+
+        // Header fields
+        parts.push("00000");                           // placeholder
+        parts.push(data.deviceId || "UNKNOWN");        // sensor ID
+        parts.push("00:00:00:00:00:00");               // MAC placeholder
+        parts.push(0);                                 // reserved
+        parts.push(Math.round((data.temperature || 0) * 100)); // temperature (raw, *100)
+        parts.push(data.sampledTime || 0);             // sampled time from sensor
+        parts.push(100);                               // sample rate placeholder
+        parts.push(100);                               // sample rate placeholder
+        parts.push(data.battery || 0);                 // battery from sensor
+        
+        const numSamples = data.accelerometer?.length || 0;
+        parts.push(numSamples);                        // number of samples
+
+        // Per-sample data: accelX,accelY,accelZ,gyroX,gyroY,gyroZ,magX,magY,magZ
+        for (let i = 0; i < numSamples; i++) {
+            const a = data.accelerometer[i] || { x: 0, y: 0, z: 0 };
+            const g = data.gyroscope[i] || { x: 0, y: 0, z: 0 };
+            const m = data.magnetometer[i] || { x: 0, y: 0, z: 0 };
+            parts.push(a.x, a.y, a.z);
+            parts.push(g.x, g.y, g.z);
+            parts.push(m.x, m.y, m.z);
+        }
+
+        return parts.join(',');
     }
 
     public async disconnect() {

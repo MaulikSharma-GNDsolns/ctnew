@@ -7,16 +7,16 @@ export const MQTT_CONFIG = {
 
     // ⚠️ TODO: Fill these in from AWS Console → Cognito → User Pools
     // User Pool ID format: ap-south-1_XXXXXXXXX
-    userPoolId: 'ap-south-1_e7y3BpNkN',
+    userPoolId: 'ap-south-1_90iFviUYd',
     // This client ID must match the one registered in the Identity Pool
-    userPoolClientId: '74cfrr2pk3hscr5ddaq10on74j',   // Dashboard_app
-    // App Client Secret (confirmed for this client)
-    userPoolClientSecret: '15rpm3brqltkjeh34tdjql6ukbcg5onbojcvoobd3k8gu2rp31gm',
+    userPoolClientId: '5l795q7hl6b2d1obegdk6b36qq',   // newly provided client ID
+    // App Client Secret
+    userPoolClientSecret: '', // Assuming no client secret unless provided
 
     // Service account used to obtain authenticated credentials for IoT Core
     serviceAccount: {
         email: 'devika.n@gndsolutions.in',
-        password: 'Devika@01',
+        password: 'Devika@2026',
     },
 
     clientId: `mobile_client_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`,
