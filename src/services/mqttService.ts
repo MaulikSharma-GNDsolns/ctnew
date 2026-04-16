@@ -1,3 +1,4 @@
+import 'react-native-get-random-values';
 import { Buffer } from 'buffer';
 import CryptoJS from 'crypto-js';
 import { CognitoUserPool, CognitoUser, AuthenticationDetails } from 'amazon-cognito-identity-js';
@@ -6,19 +7,6 @@ import AWS from "aws-sdk/dist/aws-sdk-react-native";
 // @ts-ignore
 import awsIot from "aws-iot-device-sdk";
 import { MQTT_CONFIG } from '../config/mqttCertificates';
-
-// @ts-ignore
-if (typeof global.crypto === 'undefined') {
-    // @ts-ignore
-    global.crypto = {
-        getRandomValues: (array: any) => {
-            for (let i = 0; i < array.length; i++) {
-                array[i] = Math.floor(Math.random() * 256);
-            }
-            return array;
-        }
-    };
-}
 
 class MqttService {
     private client: any = null;
@@ -98,7 +86,7 @@ class MqttService {
                 Pool: userPool
             });
             
-            console.log('[MQTT] Calling authenticateUser for:', MQTT_CONFIG.serviceAccount.email);
+            console.log('[MQTT] Calling authenticateUser (SRP Flow) for:', MQTT_CONFIG.serviceAccount.email);
             
             cognitoUser.authenticateUser(authenticationDetails, {
                 onSuccess: (result) => {
@@ -109,14 +97,23 @@ class MqttService {
                     reject(err);
                 },
                 newPasswordRequired: (userAttributes, requiredAttributes) => {
-                    console.log('[MQTT] Account requires password change (FORCE_CHANGE_PASSWORD state). Doing it automatically...');
-                    // Removing read-only attributes that cause errors if sent back
-                    delete userAttributes.email_verified;
-                    delete userAttributes.phone_number_verified;
+                    console.log('[MQTT] Account requires password change. Doing it automatically...');
+
+                    // We only need to provide attributes that are explicitly required by Cognito,
+                    // otherwise Cognito thinks we are trying to change them (which threw the phone number error).
+                    const finalAttributes: any = {};
                     
+                    if (requiredAttributes && requiredAttributes.length > 0) {
+                        for (const attr of requiredAttributes) {
+                            if (userAttributes[attr]) {
+                                finalAttributes[attr] = userAttributes[attr];
+                            }
+                        }
+                    }
+
                     cognitoUser.completeNewPasswordChallenge(
                         MQTT_CONFIG.serviceAccount.password, 
-                        userAttributes, 
+                        finalAttributes, 
                         {
                             onSuccess: (result: any) => resolve(result.getIdToken().getJwtToken()),
                             onFailure: (err: any) => reject(err)
@@ -130,7 +127,10 @@ class MqttService {
     private establishConnection() {
         console.log('[MQTT] STEP 4: Initializing IoT Device Client...');
         console.log('[MQTT] Connecting to Host:', MQTT_CONFIG.host);
-        console.log('[MQTT] Client ID:', MQTT_CONFIG.clientId);
+        
+        // Use the actual Identity ID from Cognito as the Client ID
+        const identityId = (AWS.config.credentials as any).identityId;
+        console.log('[MQTT] Using Identity ID as Client ID:', identityId);
         
         try {
             this.client = awsIot.device({
@@ -143,7 +143,7 @@ class MqttService {
                 secretKey: AWS.config.credentials.secretAccessKey,
                 // @ts-ignore
                 sessionToken: AWS.config.credentials.sessionToken,
-                clientId: MQTT_CONFIG.clientId,
+                clientId: identityId,
                 reconnectPeriod: 5000,
                 keepalive: 300, // 5 minutes
                 resubscribe: true,
@@ -152,7 +152,7 @@ class MqttService {
 
             this.client.on("connect", () => {
                 console.log("✅ [MQTT] STEP 5: CONNECTED TO AWS IOT CORE SUCCESSFUL");
-                console.log("   Connected with Client ID:", MQTT_CONFIG.clientId);
+                console.log("   Connected with Client ID:", identityId);
                 this.onStatusChange?.(true);
                 
                 console.log("[MQTT] Subscribing to Uplink Topic:", MQTT_CONFIG.topics.uplink);

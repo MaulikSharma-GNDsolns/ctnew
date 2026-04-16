@@ -9,9 +9,9 @@ export const MQTT_CONFIG = {
     // User Pool ID format: ap-south-1_XXXXXXXXX
     userPoolId: 'ap-south-1_90iFviUYd',
     // This client ID must match the one registered in the Identity Pool
-    userPoolClientId: '5l795q7hl6b2d1obegdk6b36qq',   // newly provided client ID
+    userPoolClientId: '5l795q7hl6b2d1obegdk6b36qq',
     // App Client Secret
-    userPoolClientSecret: '', // Assuming no client secret unless provided
+    userPoolClientSecret: '',
 
     // Service account used to obtain authenticated credentials for IoT Core
     serviceAccount: {
